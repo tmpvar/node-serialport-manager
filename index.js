@@ -145,11 +145,13 @@ module.exports = function(options, fn) {
                     if (header.length < options.header.length) {
                       sp.once('data', nextChunk);
                     } else {
+                      e.emit('connected');
                       fn(sp, header);
                     }
                   });
 
                 } else {
+                  e.emit('connected');
                   fn(sp);
                 }
 
@@ -164,6 +166,8 @@ module.exports = function(options, fn) {
                     }
 
                     delete obj[port.comName];
+
+                    e.emit('disconnected');
 
                     fs.writeFile(file, JSON.stringify(obj), function() {
                       timer && clearTimeout(timer);

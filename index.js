@@ -2,9 +2,7 @@ var
   serialport = require('serialport'),
   EventEmitter = require('events').EventEmitter,
   fs = require('fs'),
-  path = require('path'),
-  file = path.join(process.env.HOME, '.serialport'),
-  match = require('JSONSelect').match;
+  file = require('path').join(process.env.HOME, '.serialport');
 
 /*
   options

@@ -36,7 +36,7 @@ module.exports = function(options, fn) {
   var e = new EventEmitter();
   options = options || {};
 
-  var cleanup = function() {
+  var cleanup = function(exit) {
     fs.readFile(file, function(err, buf) {
       var inuse = {};
 
@@ -55,7 +55,7 @@ module.exports = function(options, fn) {
       managing = {};
 
       fs.writeFile(file, JSON.stringify(inuse), function() {
-        process.exit();
+        exit !== false && process.exit();
       });
     });
   };
@@ -65,6 +65,10 @@ module.exports = function(options, fn) {
   process.on('SIGQUIT', cleanup);
   process.on('SIGKILL', cleanup);
   process.on('SIGTERM', cleanup);
+  process.on('uncaughtException', function(e) {
+    console.log(e.stack);
+    cleanup(false);
+  });
 
   var timer;
 
@@ -73,6 +77,10 @@ module.exports = function(options, fn) {
     e.emit('searching');
 
     serialport.list(function(err, ports) {
+
+      if (err || !ports) {
+        return;
+      }
 
       fs.readFile(file, function(err, buf) {
 
@@ -147,6 +155,9 @@ module.exports = function(options, fn) {
                     } else {
                       e.emit('connected');
                       fn(sp, header);
+                      if (header.length > options.header) {
+                        sp.emit('data', header.substring(options.header.length-1));
+                      }
                     }
                   });
 
@@ -154,6 +165,14 @@ module.exports = function(options, fn) {
                   e.emit('connected');
                   fn(sp);
                 }
+
+                e.once('disconnected', function() {
+                  // restart the connection process
+                  // this is separated from sp 'close' event
+                  // to allow for flashing in tmpad
+                  timer && clearTimeout(timer);
+                  timer = setTimeout(search, TICK_RATE);
+                });
 
                 sp.on('close', function() {
                   fs.readFile(file, function(err, d) {
@@ -167,11 +186,8 @@ module.exports = function(options, fn) {
 
                     delete obj[port.comName];
 
-                    e.emit('disconnected');
-
                     fs.writeFile(file, JSON.stringify(obj), function() {
-                      timer && clearTimeout(timer);
-                      timer = setTimeout(search, TICK_RATE);
+                      e.emit('disconnected');
                     });
                   });
                 });
@@ -196,6 +212,10 @@ module.exports = function(options, fn) {
 
   // kick off the search immediately
   search();
+
+  e.disableReconnect = function() {
+    e.removeAllListeners('disconnected');
+  }
 
   return e;
 };

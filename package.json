@@ -13,6 +13,6 @@
   "author": "Elijah Insua",
   "license": "MIT",
   "dependencies": {
-    "serialport": "https://github.com/tmpvar/node-serialport/tarball/master",
+    "serialport": "https://github.com/tmpvar/node-serialport/tarball/master"
   }
 }

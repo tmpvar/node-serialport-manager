@@ -33,26 +33,32 @@ var
 */
 
 module.exports = function(options, fn) {
-  var managing = [];
+  var managing = {};
+  var TICK_RATE = 500;
   var e = new EventEmitter();
   options = options || {};
 
   var cleanup = function() {
     fs.readFile(file, function(err, buf) {
-        var inuse = {};
+      var inuse = {};
 
-        if (!err) {
-          inuse = JSON.parse(buf.toString());
-        }
+      if (!err) {
+        inuse = JSON.parse(buf.toString());
+      }
 
-        console.log(arguments)
-        while (managing.length) {
-          delete inuse[managing.pop()];
-        }
+      var keys = Object.keys(managing);
 
-        fs.writeFile(file, JSON.stringify(inuse), function() {
-          process.exit();
-        });
+      while (keys.length) {
+        var key = keys.pop();
+        delete inuse[key];
+        managing[key].close();
+      }
+
+      managing = {};
+
+      fs.writeFile(file, JSON.stringify(inuse), function() {
+        process.exit();
+      });
     });
   };
 
@@ -62,20 +68,36 @@ module.exports = function(options, fn) {
   process.on('SIGKILL', cleanup);
   process.on('SIGTERM', cleanup);
 
+  var timer;
 
-  var timer = setInterval(function() {
+  var search = function() {
+
     e.emit('searching');
 
     serialport.list(function(err, ports) {
+
       fs.readFile(file, function(err, buf) {
+
         var inuse = {};
 
         if (!err) {
-          inuse = JSON.parse(buf.toString());
+          try {
+            inuse = JSON.parse(buf.toString());
+          } catch(e) {
+            console.log(e.stack);
+          }
         }
 
         var current = ports.length;
-        while (current--) {
+        var next = function() {
+
+          current--;
+          if (current < 0) {
+            timer && clearTimeout(timer);
+            timer = setTimeout(search, TICK_RATE);
+            return;
+          }
+
           var port = ports[current];
 
           if (options.signature) {
@@ -89,49 +111,89 @@ module.exports = function(options, fn) {
               }
             });
 
-            if (!match) { continue; }
+            if (!match) {
+              return process.nextTick(next);
+            }
           }
-
 
           // don't use this port if either are true
           // - the port is in use
           // - the user did not pass a callback
           if (!inuse[port.comName] && fn) {
-            inuse[port.comName] = true;
-
-            managing.push(port.comName);
-
-            fs.writeFile(file, JSON.stringify(inuse), function() {
-
-              var sp = new serialport.SerialPort(
+            var sp;
+            try {
+              sp = new serialport.SerialPort(
                   port.comName,
                   options.config
               );
 
-              if (options.header) {
-                var header = "";
-                sp.once('data', function nextChunk(chunk) {
-                  header+=chunk.toString();
+            } catch (e) {
+              return process.nextTick(next);
+            }
 
-                  if (header.length < options.header.length) {
-                    sp.once('data', nextChunk);
-                  } else {
-                    clearInterval(timer);
-                    fn(sp, header);
-                  }
+            sp.on('open', function() {
+              // so we've got a serialport here that matches
+              // the required signatures
+
+              inuse[port.comName] = true;
+              managing[port.comName] = sp;
+
+              fs.writeFile(file, JSON.stringify(inuse), function() {
+                if (options.header) {
+                  var header = "";
+                  sp.once('data', function nextChunk(chunk) {
+                    header+=chunk.toString();
+
+                    if (header.length < options.header.length) {
+                      sp.once('data', nextChunk);
+                    } else {
+                      fn(sp, header);
+                    }
+                  });
+
+                } else {
+                  fn(sp);
+                }
+
+                sp.on('close', function() {
+                  fs.readFile(file, function(err, d) {
+                    var obj = {};
+
+                    if (!err) {
+                      try {
+                        obj = JSON.parse(d.toString());
+                      } catch (e) {}
+                    }
+
+                    delete obj[port.comName];
+
+                    fs.writeFile(file, JSON.stringify(obj), function() {
+                      timer && clearTimeout(timer);
+                      timer = setTimeout(search, TICK_RATE);
+                    });
+                  });
                 });
-              } else {
-                fn(sp);
-              }
+
+              });
             });
 
-            break;
+            sp.on('error', function(e) {
+              process.nextTick(next);
+            });
+          } else {
+            // not a match, try next
+            process.nextTick(next);
           }
         }
+
+        next();
+
       });
     });
+  }
 
-  }, 500);
+  // kick off the search immediately
+  search();
 
   return e;
 };
